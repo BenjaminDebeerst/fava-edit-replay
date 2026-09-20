@@ -71,7 +71,7 @@ def txn_apply_delta(obj, delta):
                 return {**current_obj, key: value}
             if action == "dictionary_item_removed" and isinstance(current_obj, dict):
                 new_dict = current_obj.copy()
-                del new_dict[key]
+                new_dict.pop(key, None)
                 return new_dict
             if is_namedtuple and action == "values_changed":
                 return current_obj._replace(**{key: value})
@@ -255,7 +255,11 @@ def apply_replays(
                 if errors or not parsed_entries:
                     break
                 parsed_txn = parsed_entries[0]
-                modified_txn = txn_apply_delta(parsed_txn, diff_dict)
+                try:
+                    modified_txn = txn_apply_delta(parsed_txn, diff_dict)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(f"Skipping {filename}:{lineno}: {e}")
+                    break
                 applied = True
                 break  # Only apply the first matching replay for this txn
         if applied:

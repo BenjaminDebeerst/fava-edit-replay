@@ -11,7 +11,7 @@ from functools import partial
 from deepdiff import DeepDiff
 from deepdiff import Delta
 from deepdiff.serialization import json_dumps
-from flask import request
+from flask import request, jsonify
 
 from beancount.core.data import Transaction
 from beancount.parser import parser
@@ -56,14 +56,37 @@ class EditReplay(FavaExtensionBase):  # pragma: no cover
         if not diff_json:
             logger.error("No diff provided.")
             return "No diff provided."
+        modified_count = self._apply_diff_to_filtered(
+            diff_json,
+            request.args.get("account", ""),
+            request.args.get("filter", ""),
+            request.args.get("time", ""),
+        )
+        return f"Applied diff to {modified_count} transactions."
 
-        # Get filter params from request
-        account = request.args.get("account", "")
-        filter_str = request.args.get("filter", "")
-        time = request.args.get("time", "")
+    @extension_endpoint("apply_last_edit", ["POST"])
+    def apply_last_edit(self):
+        """Apply the edit just saved in Fava's slice editor to the filtered journal."""
+        if self.before_slice is None or self.after_slice is None:
+            return jsonify({"message": "No last edit available."})
+        diff_json = self._compute_diff(self.before_slice, self.after_slice)
+        if not diff_json or not json.loads(diff_json):
+            return jsonify({"message": "The last edit produced no applicable diff."})
+        data = request.get_json(force=True, silent=True) or {}
+        modified_count = self._apply_diff_to_filtered(
+            diff_json,
+            data.get("account", ""),
+            data.get("filter", ""),
+            data.get("time", ""),
+        )
+        return jsonify({"message": f"Applied diff to {modified_count + 1} transactions."})
 
-        # Validate that at least one filter is provided to prevent bulk changes
-        if not account and not filter_str and not time:
+
+    def _apply_diff_to_filtered(
+            self, diff_json: str, account: str, filter_str: str, time: str
+    ) -> int:
+        # Require a filter to prevent bulk changes to all transactions.
+        if not (account or filter_str or time):
             return (
                 "At least one filter (account, filter, or time) must be specified "
                 "to prevent bulk changes to all transactions."
@@ -77,13 +100,13 @@ class EditReplay(FavaExtensionBase):  # pragma: no cover
 
         replay = Replay(0, time, account, filter_str, diff_json, None)
         modified_count = apply_replays(
-            [replay], 
-            filtered_ledger.entries, 
+            [replay],
+            filtered_ledger.entries,
             filtered_ledger.ledger.options,
             self.ledger.fava_options
         )
         self.ledger.load_file()
-        return f"Applied diff to {modified_count} transactions."
+        return modified_count
 
     @extension_endpoint
     def save_replay(self):
